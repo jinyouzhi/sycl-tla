@@ -109,6 +109,16 @@ struct scale_zero_copy_traits<datatype, N, stride,
   using type = XE_2D_U32x1x16_LD_N;
 };
 
+template <bool Enabled, class datatype, size_t N, class stride, class fallback>
+struct maybe_scale_zero_copy_traits {
+  using type = fallback;
+};
+
+template <class datatype, size_t N, class stride, class fallback>
+struct maybe_scale_zero_copy_traits<true, datatype, N, stride, fallback> {
+  using type = typename scale_zero_copy_traits<datatype, N, stride>::type;
+};
+
 template <
   int Stages,
   class TileShape_,
@@ -257,7 +267,8 @@ public:
   
   static constexpr auto SG_QNT_WIDTH = cute::conditional_t<IsATransformed, Int<SG_M>, Int<SG_N>>{};
   using GmemTiledCopyScale = typename scale_zero_copy_traits<NonVoidElementScale, SG_QNT_WIDTH>::type;
-  using GmemTiledCopyZero = typename scale_zero_copy_traits<NonVoidElementZero, SG_QNT_WIDTH, NonVoidStrideZero>::type;
+  using GmemTiledCopyZero = typename maybe_scale_zero_copy_traits<
+      ModeScaleZero, NonVoidElementZero, SG_QNT_WIDTH, NonVoidStrideZero, GmemTiledCopyScale>::type;
 
   static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K;
   static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
@@ -297,7 +308,7 @@ public:
     Copy_A tiled_copy_a;
     Copy_B tiled_copy_b;
     std::conditional_t<is_groupwise,Copy_Scale, TensorScale> tiled_copy_scale;
-    std::conditional_t<is_groupwise,Copy_Zero, TensorZero> tiled_copy_zero;
+    std::conditional_t<ModeScaleZero && is_groupwise,Copy_Zero, TensorZero> tiled_copy_zero;
     int group_size;
   };
 
