@@ -37,6 +37,7 @@ set(TEST_MODE_1 ${TEST_BASE} --groups=2 --mode=1)
 set(TEST_MODE_0 ${TEST_BASE} --groups=2 --mode=0)
 set(TEST_A_NARROW ${TEST_BASE} --groups=2 --a_narrower)
 set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=128)
+set(TEST_MXFP4_PACK32 ${TEST_BASE} --groups=2 --mode=1 --g=32)
 
 set(MMA_T bfloat16_t half_t)
 set(QUANT_T int8_t)
@@ -84,10 +85,30 @@ cutlass_example_add_executable(
   TEST_A_NARROW
   TEST_GROUP_DEQUANT
 )
+
+cutlass_example_add_executable(
+  10_bmg_grouped_gemm_bf16_u4
+  10_bmg_grouped_gemm_bf16_u4.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_GROUPS
+  TEST_MODE_1
+  TEST_MODE_0
+  TEST_A_NARROW
+  TEST_GROUP_DEQUANT
+)
+
+cutlass_example_add_executable(
+  10_bmg_grouped_gemm_mxfp4_s4_bf16scale
+  10_bmg_grouped_gemm_mxfp4_s4_bf16scale.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_MXFP4_PACK32
+)
 if (NOT DPCPP_SYCL_TARGET STREQUAL "spir64")
   # TODO(codeplay): Remove these once IGC block load loop hoisting bug is fixed
   foreach(target_exe IN LISTS EXE_LIST)
     target_link_options(${target_exe} PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
   endforeach()
   target_link_options(10_bmg_grouped_gemm_f16_u4 PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
+  target_link_options(10_bmg_grouped_gemm_bf16_u4 PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
+  target_link_options(10_bmg_grouped_gemm_mxfp4_s4_bf16scale PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
 endif()

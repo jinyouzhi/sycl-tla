@@ -487,11 +487,6 @@ public:
         auto idx =  vec_size * s / scalar;
         auto format_data = src[idx];
 
-        // for performance, _Float16 have better performance than half_t here
-        using vector_type = typename general_same_bits<DstType>::type;
-
-        auto& dst = *(cute::intel::vector_t<vector_type, vec_size>*)(d_tensor(_, s, n).data());
-
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < vec_size; i++) {
           auto data = [&]() {
@@ -507,13 +502,31 @@ public:
               static_assert(dependent_false<LayoutIn> && "ATransform not support now");
             } else {
               if constexpr (ModeScale) {
-                dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>(data * scale));
+                if constexpr (sizeof_bits_v<DstType> < 8) {
+                  d_tensor(i, s, n) = static_cast<DstType>(data * scale);
+                } else {
+                  using vector_type = typename general_same_bits<DstType>::type;
+                  auto& dst = *(cute::intel::vector_t<vector_type, vec_size>*)(d_tensor(_, s, n).data());
+                  dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>(data * scale));
+                }
               } else if constexpr (ModeScaleZero) {
-                dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>((static_cast<decltype(zero)>(data) - zero) * scale));
+                if constexpr (sizeof_bits_v<DstType> < 8) {
+                  d_tensor(i, s, n) = static_cast<DstType>((static_cast<decltype(zero)>(data) - zero) * scale);
+                } else {
+                  using vector_type = typename general_same_bits<DstType>::type;
+                  auto& dst = *(cute::intel::vector_t<vector_type, vec_size>*)(d_tensor(_, s, n).data());
+                  dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>((static_cast<decltype(zero)>(data) - zero) * scale));
+                }
               }
             }
           } else {
-            dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>(data));
+            if constexpr (sizeof_bits_v<DstType> < 8) {
+              d_tensor(i, s, n) = static_cast<DstType>(data);
+            } else {
+              using vector_type = typename general_same_bits<DstType>::type;
+              auto& dst = *(cute::intel::vector_t<vector_type, vec_size>*)(d_tensor(_, s, n).data());
+              dst[i] = cutlass::platform::bit_cast<vector_type>(static_cast<DstType>(data));
+            }
           }
         }
       }

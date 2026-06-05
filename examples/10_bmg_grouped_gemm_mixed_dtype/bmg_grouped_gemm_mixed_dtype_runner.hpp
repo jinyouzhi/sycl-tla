@@ -197,6 +197,11 @@ namespace helpers{
     using type = XE_8x16x16_F32F16F16F32_TT;
   };
 
+  template <>
+  struct MMAOp<cutlass::float_e2m1_t> {
+    using type = XE_BDPAS_TT<8, float, cutlass::float_e2m1_t>;
+  };
+
   template <typename RefLayoutB>
   struct RefTiledCopyB;
 
@@ -235,7 +240,7 @@ struct ExampleRunner {
   using ElementA = typename Gemm::ElementA;
   using ElementB = typename Gemm::ElementB;
   using ElementAcc = typename Gemm::ElementAccumulator;
-  using ElementMMA = std::conditional_t<AIsNarrower, ElementB, ElementA>;
+  using ElementMMA = typename CollectiveMainloop::ElementMMA;
   using ElementQuant = std::conditional_t<AIsNarrower, ElementA, ElementB>;
 
   using ElementScale = typename CollectiveMainloop::NonVoidElementScale;
@@ -378,8 +383,8 @@ struct ExampleRunner {
     // Compute reference output (default gemm kernel w/ ElementA == ElementB)
     //
 
-    using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-    using GmemTiledCopyB = typename helpers::RefTiledCopyB<LayoutB>::type;
+    using GmemTiledCopyA = std::conditional_t<(sizeof_bits_v<ElementMMA> < 8), void, XE_2D_U16x32x32_LD_N>;
+    using GmemTiledCopyB = std::conditional_t<(sizeof_bits_v<ElementMMA> < 8), void, typename helpers::RefTiledCopyB<LayoutB>::type>;
 
     using TileShape = Shape<_256, _256, _32>;
 
@@ -606,21 +611,27 @@ struct ExampleRunner {
                                 ScaleLayout const scale_layout,
                                 ZeroLayout const zero_layout,
                                 int const group_size) {
-    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DequantizedElement> / 8, 0);
+    std::vector<uint8_t> dst((size(operand_layout) * sizeof_bits_v<DequantizedElement> + 7) / 8, 0);
     cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
 
-    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<QuantizedElement> / 8, 0);
+    std::vector<uint8_t> src((size(operand_layout) * sizeof_bits_v<QuantizedElement> + 7) / 8, 0);
     cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
 
-    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
+    std::vector<uint8_t> scale((size(scale_layout) * sizeof_bits_v<ElementScale> + 7) / 8, 0);
     cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
 
-    std::vector<uint8_t> zero(size(zero_layout) * sizeof_bits_v<ElementZero> / 8, 0);
+    std::vector<uint8_t> zero((size(zero_layout) * sizeof_bits_v<ElementZero> + 7) / 8, 0);
     cutlass::device_memory::copy_to_host(zero.data(), (uint8_t*)zero_buffer, zero.size());
 
     compat::wait();
 
-    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), operand_layout);
+    auto dst_tensor = [&]() {
+      if constexpr (sizeof_bits_v<DequantizedElement> < 8) {
+        return make_tensor(cute::subbyte_iterator<DequantizedElement>(dst.data()), operand_layout);
+      } else {
+        return make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), operand_layout);
+      }
+    }();
 
     auto src_tensor = [&]() {
       if constexpr (sizeof_bits_v<QuantizedElement> < 8) {
@@ -671,7 +682,11 @@ struct ExampleRunner {
       }
     }
 
-    cutlass::device_memory::copy_to_device(dq_buffer, (DequantizedElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
+    if constexpr (sizeof_bits_v<DequantizedElement> < 8) {
+      cutlass::device_memory::copy_to_device(reinterpret_cast<uint8_t*>(dq_buffer), dst.data(), dst.size());
+    } else {
+      cutlass::device_memory::copy_to_device(dq_buffer, reinterpret_cast<DequantizedElement*>(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
+    }
     compat::wait();
   }
 
@@ -765,6 +780,13 @@ struct ExampleRunner {
 
     initialize_mixed_dtype_block(block_A, block_A_dq, seed + 2022);
     initialize_mixed_dtype_block(block_B, block_B_dq, seed + 2023);
+
+    if constexpr (std::is_same_v<ElementA, ElementMMA>) {
+      cutlass::device_memory::copy_device_to_device(block_A_dq.get(), block_A.get(), block_A.size());
+    }
+    if constexpr (std::is_same_v<ElementB, ElementMMA>) {
+      cutlass::device_memory::copy_device_to_device(block_B_dq.get(), block_B.get(), block_B.size());
+    }
 
     initialize_block(block_C, seed + 2024);
 
