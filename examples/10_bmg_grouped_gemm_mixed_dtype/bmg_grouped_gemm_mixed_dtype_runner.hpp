@@ -240,7 +240,7 @@ struct ExampleRunner {
   using ElementA = typename Gemm::ElementA;
   using ElementB = typename Gemm::ElementB;
   using ElementAcc = typename Gemm::ElementAccumulator;
-  using ElementMMA = typename CollectiveMainloop::ElementMMA;
+  using ElementMMA = std::conditional_t<AIsNarrower, ElementB, ElementA>;
   using ElementQuant = std::conditional_t<AIsNarrower, ElementA, ElementB>;
 
   using ElementScale = typename CollectiveMainloop::NonVoidElementScale;
@@ -330,7 +330,7 @@ struct ExampleRunner {
       DstT* h_dst = new DstT[size * L];
       for(size_t j = 0; j < L; ++j) {
         for (size_t i = 0; i < size; ++i) {
-            h_dst[i + j * size] = (static_cast<DstT>(h_src[i + j * size]) - zero_h[j]) * scale_h[j];
+            h_dst[i + j * size] = static_cast<DstT>((static_cast<DstT>(h_src[i + j * size]) - zero_h[j]) * scale_h[j]);
         }
       }
 
@@ -677,7 +677,7 @@ struct ExampleRunner {
             }
           }();
 
-          dst_tensor(n, k, l) = ((ElementScale)(a - b)) * scale_tensor(n, k / group_size, l);
+          dst_tensor(n, k, l) = static_cast<DequantizedElement>(((ElementScale)(a - b)) * scale_tensor(n, k / group_size, l));
         }
       }
     }

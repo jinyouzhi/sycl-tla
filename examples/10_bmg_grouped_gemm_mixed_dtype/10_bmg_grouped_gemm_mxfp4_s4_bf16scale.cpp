@@ -58,7 +58,7 @@ int main(int argc, const char** argv) {
   using ElementScale = bfloat16_t;
   using StrideScale = cute::Stride<_1, int64_t, int64_t>;
 
-  using GmemTiledCopyActivation = void;
+  using GmemTiledCopyActivation = XE_2D_U4x32x16_LD_T;
   using GmemTiledCopyWeight = XE_2D_U4x32x16_LD_T;
 
   using TileShape = Shape<_16, _64, _64>;

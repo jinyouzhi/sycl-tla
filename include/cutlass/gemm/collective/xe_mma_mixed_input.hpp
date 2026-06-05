@@ -184,10 +184,10 @@ public:
 
   // For cases where we can't have a void type, we can use this to allow the code to compile when the scale / zero is void.
   using NonVoidElementScale = cute::conditional_t<cute::is_void_v<ElementScale>, ElementMMA, ElementScale>;
-  using NonVoidElementZero = cute::conditional_t<cute::is_void_v<ElementZero>, ElementMMA, ElementZero>;
+  using NonVoidElementZero = cute::conditional_t<cute::is_void_v<ElementZero>, NonVoidElementScale, ElementZero>;
 
   using NonVoidStrideScale = cute::remove_pointer_t<cute::conditional_t<cute::is_same_v<StrideScale, void>, cute::Stride<_1, int64_t, int64_t>, StrideScale>>;
-  using NonVoidStrideZero = cute::remove_pointer_t<cute::conditional_t<cute::is_same_v<StrideZero, void>, cute::Stride<_1, int64_t, int64_t>, StrideZero>>;
+  using NonVoidStrideZero = cute::remove_pointer_t<cute::conditional_t<cute::is_same_v<StrideZero, void>, NonVoidStrideScale, StrideZero>>;
   static constexpr auto zero_elements_packed_along_k = get<0>(NonVoidStrideZero{});
 
   // When stride is Stride<_0, _0, _1>, quantization can be determined as tensor-wise 
