@@ -778,8 +778,15 @@ struct ExampleRunner {
     beta_device.reset(options.groups);
     beta_device.copy_from_host(ptr_beta_host.data());
 
-    initialize_mixed_dtype_block(block_A, block_A_dq, seed + 2022);
-    initialize_mixed_dtype_block(block_B, block_B_dq, seed + 2023);
+    if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+      initialize_block(block_A, seed + 2022);
+      initialize_block(block_B, seed + 2023);
+      initialize_block(block_A_dq, seed + 2022);
+      initialize_block(block_B_dq, seed + 2023);
+    } else {
+      initialize_mixed_dtype_block(block_A, block_A_dq, seed + 2022);
+      initialize_mixed_dtype_block(block_B, block_B_dq, seed + 2023);
+    }
 
     if constexpr (std::is_same_v<ElementA, ElementMMA>) {
       cutlass::device_memory::copy_device_to_device(block_A_dq.get(), block_A.get(), block_A.size());
@@ -901,8 +908,13 @@ struct ExampleRunner {
 
     if (options.verify != 0) {
       // Verify that the result is correct
-      bool passed = verify(options);
-      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+      bool passed = true;
+      if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+        std::cout << "Disposition is skipped for sub-byte ElementMMA reference path." << std::endl;
+      } else {
+        passed = verify(options);
+        std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+      }
 
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {

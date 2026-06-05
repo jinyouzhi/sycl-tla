@@ -701,9 +701,17 @@ public:
     Tensor tCgA = thr_mma.partition_A(gA);
     Tensor tCgB = thr_mma.partition_B(gB);
 
+    auto make_mma_fragment_layout = [&](auto const& tiled_copy, auto const& fragment_shape) {
+      if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+        return make_layout(fragment_shape);
+      } else {
+        return make_fragment_layout(tiled_copy, fragment_shape);
+      }
+    };
+
     // Create fragments
-    Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(mainloop.tiled_copy_a, tCgA(_,_,_,0).shape()));
-    Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(mainloop.tiled_copy_b, tCgB(_,_,_,0).shape()));
+    Tensor mma_A = make_tensor<ElementMMA>(make_mma_fragment_layout(mainloop.tiled_copy_a, tCgA(_,_,_,0).shape()));
+    Tensor mma_B = make_tensor<ElementMMA>(make_mma_fragment_layout(mainloop.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
     static constexpr int scale_traits_size = is_tensorwise ? 1
                                               : decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
