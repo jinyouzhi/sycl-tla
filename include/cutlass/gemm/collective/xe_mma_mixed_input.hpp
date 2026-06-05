@@ -751,7 +751,7 @@ public:
     }();
 
     Tensor copy_tCrZ = [&](){
-      if constexpr(is_groupwise) {
+      if constexpr(ModeScaleZero && is_groupwise) {
         auto thr_copy_zero = mainloop.tiled_copy_zero.get_slice(thread_idx);
         return thr_copy_zero.retile_D(fragment_zero);
       } else {
