@@ -87,6 +87,13 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_128, _64>;
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
+#elif HEAD_DIM == 72
+  // head_dim 72 padded to a 96-wide output tile (multiple of the 32 V tile); extra columns are predicated out by the 2D block copies.
+  using ShapeQK = Shape<_128, _64, _32>;
+  using ShapePV = Shape<_128, _32, _64>;
+  using ShapeOut = Shape<_128, _96>;
+  using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+
 #elif HEAD_DIM == 96
   using ShapeQK = Shape<_128, _64, _32>;
   using ShapePV = Shape<_128, _32, _64>;
@@ -118,6 +125,13 @@ int main(int argc, const char **argv) {
     using ShapeQK = Shape<_1, _512, _64>;
     using ShapePV = Shape<_1, _32, _512>;
     using ShapeOut = Shape<_1, _64>;
+    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+
+#elif HEAD_DIM == 72
+    // head_dim 72 padded to a 96-wide output tile; extra columns are predicated out by the 2D block copies.
+    using ShapeQK = Shape<_1, _512, _64>;
+    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeOut = Shape<_1, _96>;
     using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
 
 #elif HEAD_DIM == 96

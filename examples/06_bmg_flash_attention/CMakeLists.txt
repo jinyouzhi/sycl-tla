@@ -39,7 +39,7 @@ else()
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
 endif()
 
-foreach(HEAD_DIM 64 96 128 192)
+foreach(HEAD_DIM 64 72 96 128 192)
   foreach(INPUT_TYPE ${INPUT_TYPES})
     if (CUTLASS_TEST_FOR_CRI)
       set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
