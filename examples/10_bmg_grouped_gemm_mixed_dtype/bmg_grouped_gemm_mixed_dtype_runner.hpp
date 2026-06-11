@@ -440,7 +440,7 @@ struct ExampleRunner {
 
     ElementOutput const epsilon(1e-2f);
     ElementOutput const non_zero_floor(1e-4f);
-    bool passed = false;
+    bool passed = true;
 
     for(int i = 0; i < options.groups; i++) {
       Shape<int, int, int, int> problem_size = append<4>(options.problem_sizes_host[i], 1);
@@ -475,8 +475,13 @@ struct ExampleRunner {
       CUTLASS_CHECK(gemm_ref.run());
 
       compat::wait();
-      // compare_reference
-      passed |= cutlass::reference::device::BlockCompareRelativelyEqual(block_ref_D.get(), block_D.get() + offset_D[i], block_ref_D.size(), epsilon, non_zero_floor);
+      // compare_reference: all groups must pass verification
+      bool group_passed = cutlass::reference::device::BlockCompareRelativelyEqual(
+          block_ref_D.get(), block_D.get() + offset_D[i], block_ref_D.size(), epsilon, non_zero_floor);
+      if (!group_passed) {
+        std::cout << "Verification failed for group " << i << std::endl;
+      }
+      passed &= group_passed;
       compat::wait();
     }
 
