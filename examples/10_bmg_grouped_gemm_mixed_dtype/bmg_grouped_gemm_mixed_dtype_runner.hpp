@@ -241,6 +241,7 @@ struct ExampleRunner {
   using ElementB = typename Gemm::ElementB;
   using ElementAcc = typename Gemm::ElementAccumulator;
   using ElementMMA = std::conditional_t<AIsNarrower, ElementB, ElementA>;
+  using ElementMMAVerify = float;
   using ElementQuant = std::conditional_t<AIsNarrower, ElementA, ElementB>;
 
   using ElementScale = typename CollectiveMainloop::NonVoidElementScale;
@@ -293,10 +294,13 @@ struct ExampleRunner {
   cutlass::DeviceAllocation<ElementB> block_B;
   cutlass::DeviceAllocation<ElementMMA> block_A_dq; // Dequantized copy of A for validation
   cutlass::DeviceAllocation<ElementMMA> block_B_dq; // Dequantized copy of B for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_A_verify; // Float copy of A for sub-byte validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_B_verify; // Float copy of B for sub-byte validation
   cutlass::DeviceAllocation<ElementScale> block_S;
   cutlass::DeviceAllocation<ElementZero> block_Z;
   cutlass::DeviceAllocation<ElementC> block_C;
   cutlass::DeviceAllocation<ElementOutput> block_D;
+  cutlass::DeviceAllocation<ElementOutput> block_ref_D;
 
   cutlass::DeviceAllocation<const ElementA *> ptr_A;
   cutlass::DeviceAllocation<const ElementB *> ptr_B;
@@ -488,6 +492,53 @@ struct ExampleRunner {
     return passed;
   }
 
+  bool verify_subbyte(const Options &options) {
+    bool passed = true;
+    ElementOutput const epsilon(1e-2f);
+    ElementOutput const non_zero_floor(1e-4f);
+
+    for (int i = 0; i < options.groups; ++i) {
+      Shape<int, int, int, int> problem_size = append<4>(options.problem_sizes_host[i], 1);
+      auto M = get<0>(problem_size);
+      auto N = get<1>(problem_size);
+      auto K = get<2>(problem_size);
+
+      cutlass::TensorRef ref_A(block_A_verify.get() + offset_A.at(i), LayoutA::packed({M, K}));
+      cutlass::TensorRef ref_B(block_B_verify.get() + offset_B.at(i), LayoutB::packed({K, N}));
+      cutlass::TensorRef ref_C(block_C.get() + offset_C.at(i), LayoutC::packed({M, N}));
+      cutlass::TensorRef ref_D(block_ref_D.get() + offset_D.at(i), LayoutD::packed({M, N}));
+
+      cutlass::reference::device::GemmComplex(
+            {M, N, K},
+            alpha_host.at(i),
+            ref_A,
+            cutlass::ComplexTransform::kNone,
+            ref_B,
+            cutlass::ComplexTransform::kNone,
+            beta_host.at(i),
+            ref_C,
+            ref_D,
+            ElementAccumulator(0),
+            1,     // batch_count
+            M * K, // batch_stride_A
+            K * N, // batch_stride_B
+            M * N, // batch_stride_C
+            M * N  // batch_stride_D
+          );
+      compat::wait();
+
+      int64_t elements_d = i == options.groups - 1 ? block_D.size() - offset_D[i] : offset_D[i + 1] - offset_D[i];
+      bool group_passed = cutlass::reference::device::BlockCompareRelativelyEqual(
+          block_ref_D.get() + offset_D.at(i), block_D.get() + offset_D.at(i), elements_d, epsilon, non_zero_floor);
+      if (!group_passed) {
+        std::cout << "Verification failed for group " << i << std::endl;
+      }
+      passed &= group_passed;
+    }
+
+    return passed;
+  }
+
   /// Allocates device-side data
   void allocate(const Options &options) {
     int64_t total_elements_A = 0;
@@ -556,6 +607,11 @@ struct ExampleRunner {
     block_Z.reset(total_elements_Z);
     block_C.reset(total_elements_C);
     block_D.reset(total_elements_D);
+    if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+      block_A_verify.reset(total_elements_A);
+      block_B_verify.reset(total_elements_B);
+      block_ref_D.reset(total_elements_D);
+    }
     block_alpha.reset(options.groups);
     block_beta.reset(options.groups);
   }
@@ -788,6 +844,8 @@ struct ExampleRunner {
       initialize_block(block_B, seed + 2023);
       initialize_block(block_A_dq, seed + 2022);
       initialize_block(block_B_dq, seed + 2023);
+      convert_dtype<ElementA, ElementMMAVerify, ExampleRunner>(block_A, block_A_verify);
+      convert_dtype<ElementB, ElementMMAVerify, ExampleRunner>(block_B, block_B_verify);
     } else {
       initialize_mixed_dtype_block(block_A, block_A_dq, seed + 2022);
       initialize_mixed_dtype_block(block_B, block_B_dq, seed + 2023);
@@ -846,15 +904,30 @@ struct ExampleRunner {
           dequantize(block_A_dq.get() + offset_A.at(i), block_A.get() + offset_A.at(i), layout_A,
                      block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
                      options.g);
+          if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+            dequantize(block_A_verify.get() + offset_A.at(i), block_A.get() + offset_A.at(i), layout_A,
+                       block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
+                       options.g);
+          }
         } else {
             if constexpr (cute::sizeof_bits_v<ElementB> < 8) {
                 dequantize_B_int4(block_B_dq.get() + offset_B.at(i), block_B.get() + offset_B.at(i), layout_B,
                             block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
                             options.g);
+                if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+                  dequantize_B_int4(block_B_verify.get() + offset_B.at(i), block_B.get() + offset_B.at(i), layout_B,
+                              block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
+                              options.g);
+                }
             } else {
                 dequantize(block_B_dq.get() + offset_B.at(i), block_B.get() + offset_B.at(i), layout_B,
                             block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
                             options.g);
+                if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+                  dequantize(block_B_verify.get() + offset_B.at(i), block_B.get() + offset_B.at(i), layout_B,
+                              block_S.get() + offset_S.at(i), block_Z.get() + offset_Z.at(i), layout_scale, layout_zero,
+                              options.g);
+                }
             }
         }
       } else {
@@ -867,6 +940,15 @@ struct ExampleRunner {
               block_Z.get() + offset_Z.at(i),
               size_a, 1
           );
+          if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+            quantize_tensorwise<ElementQuant, ElementMMAVerify>(
+                block_A.get() + offset_A.at(i),
+                block_A_verify.get() + offset_A.at(i),
+                block_S.get() + offset_S.at(i),
+                block_Z.get() + offset_Z.at(i),
+                size_a, 1
+            );
+          }
         } else {
           const size_t size_b = i == options.groups - 1 ? block_B.size() - offset_B[i] : offset_B[i + 1] - offset_B[i];
           quantize_tensorwise<ElementQuant, ElementMMA>(
@@ -876,6 +958,15 @@ struct ExampleRunner {
               block_Z.get() + offset_Z.at(i),
               size_b, 1
           );
+          if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
+            quantize_tensorwise<ElementQuant, ElementMMAVerify>(
+                block_B.get() + offset_B.at(i),
+                block_B_verify.get() + offset_B.at(i),
+                block_S.get() + offset_S.at(i),
+                block_Z.get() + offset_Z.at(i),
+                size_b, 1
+            );
+          }
         }
       }
     }
@@ -915,7 +1006,8 @@ struct ExampleRunner {
       // Verify that the result is correct
       bool passed = true;
       if constexpr (cute::sizeof_bits_v<ElementMMA> < 8) {
-        std::cout << "Disposition is skipped for sub-byte ElementMMA reference path." << std::endl;
+        passed = verify_subbyte(options);
+        std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
       } else {
         passed = verify(options);
         std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
