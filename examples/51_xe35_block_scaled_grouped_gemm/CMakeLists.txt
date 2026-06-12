@@ -52,6 +52,13 @@ cutlass_example_add_executable(
 )
 
 cutlass_example_add_executable(
+  51_xe35_block_scaled_grouped_gemm_f4_u4
+  51_xe35_block_scaled_grouped_gemm_f4_u4.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_fp8_e4m3
   51_xe35_block_scaled_grouped_gemm_fp8_e4m3.cpp
   TEST_COMMAND_OPTIONS

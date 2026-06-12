@@ -46,6 +46,8 @@
 
 #include <cute/tensor.hpp>
 #include <random>
+#include <algorithm>
+#include <cmath>
 
 #include "cutlass/util/command_line.h"
 #include "cutlass/util/device_memory.h"
@@ -191,7 +193,8 @@ struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
-  class Gemm
+  class Gemm,
+  bool BFromU4 = false   // Plan A: source B from uint4 + bf16 group-scale, MX-quantized to e2m1 + ue8m0 offline.
 >
 struct ExampleRunner {
 
@@ -391,6 +394,70 @@ struct ExampleRunner {
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
 #endif
     return true;
+  }
+
+  // Plan A converter: take a B operand stored as uint4 codes with a bf16 per-(N, K-group) scale
+  // (pack/group size == scaleGroupK == 32) and MX-quantize it offline into the kernel's native
+  // MXFP4 buffers: e2m1 data (`d_B`) + ue8m0 block-scale (`d_SB`). The dequantized B used by the
+  // reference path is then reconstructed from these e2m1/ue8m0 buffers exactly like the other
+  // example-51 paths, so the GEMM is verified against the MXFP4 representation actually fed to it.
+  template <class ShapeB, class StrideBT, class ShapeSB, class StrideSBT>
+  static void fill_B_from_u4_bf16(
+      cutlass::DeviceAllocation<ElementB>& d_B,
+      cutlass::DeviceAllocation<ElementScaleB>& d_SB,
+      int N, int K,
+      ShapeB const& shape_B, StrideBT const& stride_b,
+      ShapeSB const& shape_sb, StrideSBT const& stride_sb,
+      uint64_t seed) {
+    static constexpr int group = scaleGroupK;          // MX group == uint4 pack32 group
+    const int scale_k = cute::ceil_div(K, group);
+
+    auto layout_B  = make_layout(shape_B,  stride_b);  // (N, K, 1)
+    auto layout_sb = make_layout(shape_sb, stride_sb); // (padded_N_scale, scale_k, 1)
+
+    // Host staging buffers (e2m1 is sub-byte, packed into raw bytes).
+    std::vector<uint8_t> b_bytes(size(layout_B) * sizeof_bits_v<ElementB> / 8, 0);
+    auto b_t = make_tensor(cute::subbyte_iterator<ElementB>(b_bytes.data()), layout_B);
+
+    std::vector<ElementScaleB> sb_host(size(layout_sb), ElementScaleB(1));
+    auto sb_t = make_tensor(make_gmem_ptr(sb_host.data()), layout_sb);
+
+    std::mt19937 rng(static_cast<unsigned>(seed));
+    std::uniform_int_distribution<int> u4_dist(0, 15);
+    std::uniform_real_distribution<float> scale_dist(0.25f, 1.0f);
+
+    constexpr float e2m1_max = 6.0f;                   // max representable magnitude of e2m1
+    std::vector<float> real(group);
+
+    for (int n = 0; n < N; ++n) {
+      for (int g = 0; g < scale_k; ++g) {
+        // One bf16 source scale per (n, K-group), matching the uint4 pack32 layout.
+        float bf16_scale = static_cast<float>(cutlass::bfloat16_t(scale_dist(rng)));
+        float amax = 0.f;
+        for (int t = 0; t < group; ++t) {
+          int k = g * group + t;
+          float code = (k < K) ? static_cast<float>(u4_dist(rng)) : 0.f;
+          real[t] = code * bf16_scale;               // ConvertAndScale dequant (no zero point)
+          amax = std::max(amax, std::fabs(real[t]));
+        }
+        // MX block-scale: smallest power of two so that real/scale fits the e2m1 range.
+        int exp = (amax > 0.f) ? static_cast<int>(std::ceil(std::log2(amax / e2m1_max))) : 0;
+        float scale = std::ldexp(1.0f, exp);
+        ElementScaleB ue(scale);                       // ue8m0 stores 2^exp exactly
+        sb_t(n, g, 0) = ue;
+        float inv_scale = 1.0f / static_cast<float>(ue);
+        for (int t = 0; t < group; ++t) {
+          int k = g * group + t;
+          if (k < K) {
+            b_t(n, k, 0) = ElementB(real[t] * inv_scale);
+          }
+        }
+      }
+    }
+
+    cutlass::device_memory::copy_to_device(reinterpret_cast<uint8_t*>(d_B.get()), b_bytes.data(), b_bytes.size());
+    cutlass::device_memory::copy_to_device(d_SB.get(), sb_host.data(), sb_host.size());
+    compat::wait();
   }
 
   template <
@@ -623,7 +690,13 @@ struct ExampleRunner {
       stride_SFB_host.push_back(stride_sfb);
 
       initialize_block(block_A.at(i), seed + 2023 + i);
-      initialize_block(block_B.at(i), seed + 2022 + i);
+      if constexpr (BFromU4) {
+        // Plan A: B comes from a uint4 + bf16 group-scale source, MX-quantized offline.
+        fill_B_from_u4_bf16(block_B.at(i), block_scaleB.at(i), N, K,
+                            shape_B, stride_b, shape_scale_B, stride_sfb, seed + 2022 + i);
+      } else {
+        initialize_block(block_B.at(i), seed + 2022 + i);
+      }
       initialize_block(block_C.at(i), seed + 2021 + i);
 
       convert_dtype<ElementA, ElementMMAVerify, ExampleRunner>(
@@ -636,7 +709,10 @@ struct ExampleRunner {
       );
 
       initialize_scale(block_scaleA.at(i), options);
-      initialize_scale(block_scaleB.at(i), options);
+      if constexpr (!BFromU4) {
+        // For Plan A the B scale (ue8m0) was already produced by fill_B_from_u4_bf16.
+        initialize_scale(block_scaleB.at(i), options);
+      }
 
       auto layout_A = make_layout(shape_A, stride_a);
       auto layout_B = make_layout(shape_B, stride_b);
