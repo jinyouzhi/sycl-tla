@@ -197,6 +197,11 @@ namespace helpers{
     using type = XE_8x16x16_F32F16F16F32_TT;
   };
 
+  template <>
+  struct MMAOp<cutlass::float_e2m1_t> {
+    using type = XE_BDPAS_TT<8, float, cutlass::float_e2m1_t>;
+  };
+
   template <typename RefLayoutB>
   struct RefTiledCopyB;
 
@@ -378,8 +383,12 @@ struct ExampleRunner {
     // Compute reference output (default gemm kernel w/ ElementA == ElementB)
     //
 
-    using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
-    using GmemTiledCopyB = typename helpers::RefTiledCopyB<LayoutB>::type;
+        using GmemTiledCopyA = cute::conditional_t<cute::sizeof_bits_v<ElementMMA> == 4,
+          XE_2D_U4x16x64_LD_N,
+          XE_2D_U16x32x32_LD_N>;
+        using GmemTiledCopyB = cute::conditional_t<cute::sizeof_bits_v<ElementMMA> == 4,
+          XE_2D_U4x32x16_LD_T,
+          typename helpers::RefTiledCopyB<LayoutB>::type>;
 
     using TileShape = Shape<_256, _256, _32>;
 

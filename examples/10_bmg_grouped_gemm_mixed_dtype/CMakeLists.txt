@@ -84,10 +84,26 @@ cutlass_example_add_executable(
   TEST_A_NARROW
   TEST_GROUP_DEQUANT
 )
+
+if (DEFINED SYCL_INTEL_TARGET AND SYCL_TARGET_INTEL_GPU_CRI)
+  cutlass_example_add_executable(
+    10_bmg_grouped_gemm_f4_u4
+    10_bmg_grouped_gemm_f4_u4.cpp
+    TEST_COMMAND_OPTIONS
+    TEST_GROUPS
+    TEST_MODE_1
+    TEST_MODE_0
+    TEST_A_NARROW
+    TEST_GROUP_DEQUANT
+  )
+endif()
 if (NOT DPCPP_SYCL_TARGET STREQUAL "spir64")
   # TODO(codeplay): Remove these once IGC block load loop hoisting bug is fixed
   foreach(target_exe IN LISTS EXE_LIST)
     target_link_options(${target_exe} PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
   endforeach()
   target_link_options(10_bmg_grouped_gemm_f16_u4 PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
+  if (TARGET 10_bmg_grouped_gemm_f4_u4)
+    target_link_options(10_bmg_grouped_gemm_f4_u4 PRIVATE -Xs "-options \"-igc_opts 'allowDecompose2DBlockFuncs=0'\"" )
+  endif()
 endif()
